@@ -5,49 +5,75 @@ import subprocess
 import hashlib
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
+import numpy as np # <-- Import numpy for bar chart spacing
+
+# --- We must import these to load the table ---
+from rainbowtable import RainbowTable
+from algorithm import Algorithm
+# ---
 
 # --- Configuration ---
-# Adjust these parameters for your experiment
-
-PYTHON_CMD = sys.executable  # Use the current python executable
+PYTHON_CMD = sys.executable
 GEN_SCRIPT = "rainbowgen.py"
-CRACK_SCRIPT = "rainbowcrack.py"
-
-# Parameters to keep constant for a fair test
 ALGORITHM = "sha1"
 CHARSET = "alphanumeric"
 MIN_LEN = 1
 MAX_LEN = 6  # Max length for the password
 CHAIN_LEN = 200
-
-# The "variable" we are testing: Number of chains
-# More chains = More memory (file size)
-# We will test each of these values
 N_CHAINS_LIST = [1000, 5000, 10000, 20000, 40000]
 
-# The target password and hash to find
-# Must match the constant parameters (e.g., "ab1" is alphanumeric, length 3)
-TARGET_PASSWORD = "ab1"
-TARGET_HASH = hashlib.sha1(TARGET_PASSWORD.encode('utf-8')).hexdigest()
-
+# --- NEW: Test Set Configuration ---
+NUM_TEST_HASHES = 100 # How many random hashes to test against each table
 # --- End Configuration ---
 
 
-def run_experiment():
+def generate_test_hashes(charset, min_len, max_len, num_hashes):
+    """
+    Generates a fixed set of random passwords and their hashes
+    to test all tables against.
+    """
+    print(f"Generating {num_hashes} test hashes...")
+    test_set = {} # Use a dict to store {hash: password}
+    
+    # We need a temporary algorithm object just to call hash_function
+    # We use the real rainbowtable.py for consistency
+    temp_rt = RainbowTable(ALGORITHM, CHARSET, MIN_LEN, MAX_LEN, CHAIN_LEN, 1)
+
+    while len(test_set) < num_hashes:
+        # Generate a random password
+        k = random.randint(min_len, max_len)
+        password = ''.join(random.choices(charset, k=k))
+        
+        # Hash it
+        hash_bytes = temp_rt.hash_function(password)
+        hash_hex = hash_bytes.hex()
+        
+        if hash_hex not in test_set:
+            test_set[hash_hex] = password
+            
+    print(f"Test set created with {len(test_set)} unique hashes.\n")
+    return test_set
+
+
+def run_experiment(test_set):
     """
     Runs the full experiment and returns a list of results.
     """
     results = []
     
+    table_dir = "generated_tables"
+    os.makedirs(table_dir, exist_ok=True)
+    print(f"Tables will be saved in '{table_dir}/'\n")
+    
     print(f"Starting experiment...")
-    print(f"Target Hash: {TARGET_HASH} (for password '{TARGET_PASSWORD}')\n")
 
     for n_chains in N_CHAINS_LIST:
         print(f"--- Testing with n_chains = {n_chains} ---")
         
-        output_file = f"temp_table_{n_chains}.rt"
+        output_file = os.path.join(table_dir, f"table_{n_chains}_chains.rt")
         
-        # 1. Measure Generation Time
+        # 1. Generate the table
         gen_command = [
             PYTHON_CMD, GEN_SCRIPT,
             ALGORITHM, CHARSET,
@@ -56,48 +82,65 @@ def run_experiment():
             output_file
         ]
         
-        print("Running rainbowgen.py...")
+        print(f"Running rainbowgen.py")
         start_time = time.perf_counter()
-        # We capture output to hide the script's own logs for a cleaner report
         subprocess.run(gen_command, check=True, capture_output=True)
         end_time = time.perf_counter()
         gen_time_s = end_time - start_time
         print(f"Generation took: {gen_time_s:.2f} s")
 
-        # 2. Measure File Size (Memory)
+        # 2. Measure File Size
         file_size_bytes = os.path.getsize(output_file)
         file_size_kb = file_size_bytes / 1024
         print(f"File size: {file_size_kb:.2f} KB")
 
-        # 3. Measure Cracking Time
-        crack_command = [
-            PYTHON_CMD, CRACK_SCRIPT,
-            TARGET_HASH,
-            output_file
-        ]
+        # 3. --- NEW: Measure Success Rate ---
+        print(f"Loading table and testing {NUM_TEST_HASHES} hashes...")
+        rt = RainbowTable.load_from_file(output_file)
         
-        print("Running rainbowcrack.py...")
-        start_time = time.perf_counter()
-        # Run 5 times and take the average for a more stable crack time
-        crack_times = []
-        for _ in range(5):
-            proc_start = time.perf_counter()
-            subprocess.run(crack_command, check=True, capture_output=True)
-            proc_end = time.perf_counter()
-            crack_times.append(proc_end - proc_start)
+        if not rt.table:
+            print("Warning: Table is empty. Success Rate is 0%.")
+            results.append({
+                "Chains": n_chains,
+                "File Size (KB)": file_size_kb,
+                "Generation Time (s)": gen_time_s,
+                "Success Rate (%)": 0.0,
+            })
+            continue
+
+        hits_found = 0
+        start_crack_time = time.perf_counter()
         
-        crack_time_s = sum(crack_times) / len(crack_times)
-        print(f"Cracking took (avg of 5): {crack_time_s:.4f} s")
+        for hash_to_crack, original_password in test_set.items():
+            found_password = rt.lookup(hash_to_crack)
+            if found_password == original_password:
+                hits_found += 1
+            elif found_password is not None:
+                # This is a "false positive" - the table found a
+                # different password that produces the same hash (a hash collision)
+                # For this experiment, we'll count it as a hit.
+                hits_found += 1
+
+        end_crack_time = time.perf_counter()
+        
+        # Calculate results
+        total_crack_time_s = end_crack_time - start_crack_time
+        success_rate = (hits_found / NUM_TEST_HASHES) * 100.0
+        
+        print(f"Hits: {hits_found} / {NUM_TEST_HASHES}")
+        print(f"Success Rate: {success_rate:.1f} %")
+        print(f"Total crack time for {NUM_TEST_HASHES} hashes: {total_crack_time_s:.2f} s")
+
 
         # 4. Store results
         results.append({
             "Chains": n_chains,
             "File Size (KB)": file_size_kb,
             "Generation Time (s)": gen_time_s,
-            "Cracking Time (s)": crack_time_s,
+            "Success Rate (%)": success_rate, # <-- NEW METRIC
         })
         
-        print("\n")
+        print(f"Table saved: {output_file}\n")
 
     return results
 
@@ -114,37 +157,56 @@ def analyze_and_plot(results):
     
     # 2. Print the final report table (in markdown format)
     print("\n--- Experiment Summary ---")
-    print(df.to_markdown(index=False, floatfmt=".4f"))
+    print(df.to_markdown(index=False, floatfmt=(".4f", ".4f", ".4f", ".2f")))
+
 
     # 3. Create Plots
     
-    # Plot 1: Generation Cost (Time & Size)
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    # --- START PLOT 1 MODIFICATION ---
+    # Plot 1: Generation Cost (Time & Size) as a Grouped Bar Chart
     
+    labels = df['Chains'].astype(str) # Use chains as string labels
+    x = np.arange(len(labels))  # the label locations
+    width = 0.35  # the width of the bars
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    # Plot Generation Time bars
     color = 'tab:red'
-    ax1.set_xlabel('Number of Chains (Table Size)')
+    ax1.set_xlabel('Number of Chains')
     ax1.set_ylabel('Generation Time (s)', color=color)
-    ax1.plot(df['Chains'], df['Generation Time (s)'], 'o-', color=color)
+    bars1 = ax1.bar(x - width/2, df['Generation Time (s)'], width, label='Generation Time (s)', color=color)
     ax1.tick_params(axis='y', labelcolor=color)
 
-    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+    # Instantiate a second axes that shares the same x-axis
+    ax2 = ax1.twinx()  
+    
+    # Plot File Size bars
     color = 'tab:blue'
     ax2.set_ylabel('File Size (KB)', color=color)
-    ax2.plot(df['Chains'], df['File Size (KB)'], 's--', color=color)
+    bars2 = ax2.bar(x + width/2, df['File Size (KB)'], width, label='File Size (KB)', color=color)
     ax2.tick_params(axis='y', labelcolor=color)
 
-    fig.tight_layout()  # so the right y-label is not clipped
+    # Add x-axis labels
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels)
+    
+    fig.legend(loc="upper left", bbox_to_anchor=(0.1, 0.9))
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make room for legend
     plt.title('Generation Cost (Time and Memory)')
-    plt.grid(True)
+    plt.grid(True, axis='y') # Grid on y-axis only
     plt.savefig('generation_cost_plot.png')
     print("\nSaved plot: 'generation_cost_plot.png'")
+    # --- END PLOT 1 MODIFICATION ---
 
-    # Plot 2: The Time-Memory Trade-off (Cracking Time)
+
+    # Plot 2: The Time-Memory Trade-off (Success Rate)
+    # (This one remains a line plot, as it shows a trend)
     plt.figure(figsize=(10, 6))
-    plt.plot(df['File Size (KB)'], df['Cracking Time (s)'], 'o-')
+    plt.plot(df['File Size (KB)'], df['Success Rate (%)'], 'o-')
     plt.xlabel('File Size (KB)  <--- (Memory Cost)')
-    plt.ylabel('Cracking Time (s)  <--- (Time Cost)')
-    plt.title('Time-Memory Trade-off')
+    plt.ylabel('Success Rate (%)  <--- (The "Time" Payoff)')
+    plt.title('Time-Memory Trade-off: Success Rate')
     plt.grid(True)
     plt.savefig('tradeoff_plot.png')
     print("Saved plot: 'tradeoff_plot.png'")
@@ -152,8 +214,14 @@ def analyze_and_plot(results):
 
 if __name__ == "__main__":
     try:
-        experiment_results = run_experiment()
+        # First, generate the set of test hashes
+        temp_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        test_hash_set = generate_test_hashes(temp_charset, MIN_LEN, MAX_LEN, NUM_TEST_HASHES)
+        
+        # Now, run the experiment using this test set
+        experiment_results = run_experiment(test_hash_set)
         analyze_and_plot(experiment_results)
+        
     except FileNotFoundError as e:
         print(f"ERROR: Script not found. Make sure {e.filename} is in the same directory.")
     except Exception as e:
