@@ -138,6 +138,11 @@ These results highlight the trade-off: larger tables (more file size) take longe
 
 ---
 
+## 🔗 Presentation
+https://github.com/abhi5hek001/rainbow-table-TMTO/blob/main/presentation.pdf
+
+---
+
 ## Team 
 Abhishek Sahay \
 Neeraj Kumar \
