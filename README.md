@@ -2,6 +2,8 @@
 
 A Python implementation of a classic **Rainbow Table** — a pre-computed data structure used to speed up cracking of password hashes by trading memory for time. This repository provides tools to **generate** rainbow tables, **crack** hashes using those tables, and **analyze** the time–memory trade-off.
 
+🔗 https://github.com/abhi5hek001/rainbow-table-TMTO/blob/main/presentation.pdf
+
 ---
 
 ## Features
@@ -135,11 +137,6 @@ These results highlight the trade-off: larger tables (more file size) take longe
 * Increase `n_chains` and `chain_length` for higher coverage — at the cost of more memory and generation time.
 * Use multiple reduction functions or distinguished point optimization to reduce collisions and improve coverage.
 * Use a faster language or parallelize chain generation if you intend to scale massively (Python is convenient for learning but not the fastest for very large tables).
-
----
-
-## 🔗 Presentation
-https://github.com/abhi5hek001/rainbow-table-TMTO/blob/main/presentation.pdf
 
 ---
 
